@@ -1,0 +1,31 @@
+name: CHELSA -> Hrvatska
+
+on:
+  workflow_dispatch:
+    inputs:
+      groups:
+        description: "grupe (zarezom odvojeno)"
+        default: "clim_present,clim_future,monthly,annual,daily_normals,daily"
+
+jobs:
+  crop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install rasterio numpy
+      - name: Crop
+        run: python chelsa_hr.py --out out --groups "${{ inputs.groups }}" --shard ${{ matrix.shard }}/20 --workers 8
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: chelsa-hr-${{ matrix.shard }}
+          path: out/
+          retention-days: 30
