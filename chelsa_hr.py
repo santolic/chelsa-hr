@@ -90,6 +90,7 @@ DEFAULT_GROUPS = ["clim_present", "clim_future", "monthly", "annual", "daily_nor
 SKIP_PARTS = ("/5km/", "/ncdf/")  # 5 km kopija i NetCDF duplikati
 EXTS = (".tif", ".nc", ".sdat")
 NC_SLOTS = threading.Semaphore(int(os.environ.get("CHELSA_NC_SLOTS", "2")))  # NetCDF se skida cijeli
+NC_LOCK = threading.Lock()  # libnetcdf nije thread-safe (paralelno otvaranje -> segfault)
 
 
 # ----------------------------------------------------------------- listing
@@ -197,10 +198,14 @@ def crop_raster(src_path, dst_path, bbox):
 
 def nc_variables(path):
     """Podatkovne varijable u NetCDF-u (bez koordinata, granica i crs-a)."""
+    import warnings
+
     import rasterio
 
-    with rasterio.open(path) as s:
-        subs = list(s.subdatasets)
+    with warnings.catch_warnings():  # kontejner s vise varijabli nema geotransform
+        warnings.simplefilter("ignore", rasterio.errors.NotGeoreferencedWarning)
+        with rasterio.open(path) as s:
+            subs = list(s.subdatasets)
     if not subs:
         return [(path, "")]
     skip = re.compile(r":(time|lat|lon|latitude|longitude|crs|x|y)$|_bnds$|_bounds$", re.I)
@@ -215,12 +220,13 @@ def crop_nc(url, dst, bbox):
             local = os.path.join(tmpdir, "src.nc")
             with urllib.request.urlopen(url, timeout=120) as r, open(local, "wb") as f:
                 shutil.copyfileobj(r, f, 8 << 20)
-            variables = nc_variables(local)
-            for path, var in variables:
-                out = dst if len(variables) == 1 else dst.with_name(f"{dst.stem}_{var}{dst.suffix}")
-                part = out.with_name(out.name + ".part")
-                crop_raster(path, str(part), bbox)
-                os.replace(part, out)
+            with NC_LOCK:
+                variables = nc_variables(local)
+                for path, var in variables:
+                    out = dst if len(variables) == 1 else dst.with_name(f"{dst.stem}_{var}{dst.suffix}")
+                    part = out.with_name(out.name + ".part")
+                    crop_raster(path, str(part), bbox)
+                    os.replace(part, out)
             return len(variables)
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
